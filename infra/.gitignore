@@ -1,0 +1,10 @@
+# OpenTofu working files and state (state can contain secrets)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Local variables (IPs, usernames, key paths)
+homelab.tfvars
+*.auto.tfvars
