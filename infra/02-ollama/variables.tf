@@ -44,7 +44,13 @@ variable "port" {
 variable "keep_alive" {
   description = "How long a model stays in RAM after the last request."
   type        = string
-  default     = "10m"
+  default     = "-1"
+}
+
+variable "context_length" {
+  description = "Janela de contexto por omissão. Menor = menos RAM e prompts mais rápidos."
+  type        = number
+  default     = 2048
 }
 
 variable "memory_limit_mb" {
@@ -56,5 +62,5 @@ variable "memory_limit_mb" {
 variable "models" {
   description = "Models to pull. CPU-only server: keep to ~1-4B parameters. Removing one from the list deletes it from the server."
   type        = list(string)
-  default     = ["llama3.2:3b"]
+  default     = ["llama3.2:3b", "llama3.2:1b", "qwen2.5-coder:1.5b"]
 }

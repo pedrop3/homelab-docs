@@ -24,6 +24,9 @@ resource "docker_container" "ollama" {
     # Old CPU + limited RAM: one model, one request at a time.
     "OLLAMA_MAX_LOADED_MODELS=1",
     "OLLAMA_NUM_PARALLEL=1",
+    "OLLAMA_CONTEXT_LENGTH=${var.context_length}",
+    "OLLAMA_FLASH_ATTENTION=1",
+    "OLLAMA_KV_CACHE_TYPE=q8_0"
   ]
 
   ports {
