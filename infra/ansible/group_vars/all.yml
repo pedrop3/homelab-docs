@@ -5,15 +5,11 @@
 data_root: /srv/homelab
 
 # --- Who may connect ---
-# Devices on the home network allowed to reach SSH and every Docker-published
-# port (Ollama, ...). Everything else is dropped.
-# Reserve each IP in the router's DHCP, or a new IP locks that device out.
-# To trust the whole home network instead, add "{{ lan_cidr }}".
-trusted_lan_hosts:
-  - 192.168.1.14/32   # Mac (Wi-Fi)
+# trusted_lan_hosts (your own devices on the home network) is set in
+# ../local.yml, which is git-ignored. See local.yml.example.
 
 # The whole home network, detected from the server's own IP. Not trusted by
-# default; see trusted_lan_hosts.
+# default; add it to trusted_lan_hosts to trust every device on the LAN.
 lan_cidr: "{{ ansible_facts['default_ipv4']['network'] }}/{{ ansible_facts['default_ipv4']['prefix'] }}"
 
 # Tailscale devices (100.64.0.0/10) are added when tailscale_enabled is true.

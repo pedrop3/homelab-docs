@@ -14,6 +14,12 @@ ifeq ($(wildcard $(TFVARS)),)
 $(error $(TFVARS) not found. Run: cp homelab.tfvars.example $(TFVARS) and edit it)
 endif
 
+# Your own devices allowed through the firewall (git-ignored).
+LOCALVARS := ansible/local.yml
+ifeq ($(wildcard $(LOCALVARS)),)
+$(error $(LOCALVARS) not found. Run: cp ansible/local.yml.example $(LOCALVARS) and edit it)
+endif
+
 tfvar     = $(shell sed -nE 's/^$(1)[[:space:]]*=[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' $(TFVARS))
 HOST     := $(call tfvar,host)
 SSH_USER := $(call tfvar,ssh_user)
@@ -23,7 +29,7 @@ SSH_PORT := $(or $(call tfvar,ssh_port),22)
 # --ask-become-pass: Ansible asks for your sudo password once per run.
 PLAYBOOK := cd ansible && ansible-playbook site.yml -i '$(HOST),' \
 	-e ansible_user=$(SSH_USER) -e ansible_port=$(SSH_PORT) \
-	-e ansible_ssh_private_key_file=$(SSH_KEY) --ask-become-pass
+	-e ansible_ssh_private_key_file=$(SSH_KEY) -e @local.yml --ask-become-pass
 
 DIR_ollama := tofu/ollama
 VARS       := -var-file=$(CURDIR)/$(TFVARS)
