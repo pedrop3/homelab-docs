@@ -1,11 +1,11 @@
 # Running Ollama on the homelab server with OpenTofu
 
-This guide sets up [Ollama](https://ollama.com) on the homelab server so any device on your network can run local AI models. OpenTofu installs everything from your Mac over SSH, so you don't install anything by hand on the server. The code is in [`infra/`](../infra/), and [`infra/README.md`](../infra/README.md) has the command reference.
+This guide sets up [Ollama](https://ollama.com) on the homelab server so any device on your network can run local AI models. Ansible prepares the server and OpenTofu runs Ollama, both from your Mac over SSH, so you don't install anything by hand on the server. The code is in [`infra/`](../infra/), and [`infra/README.md`](../infra/README.md) has the command reference.
 
 The server in this guide is an Ubuntu machine with 11 GB of RAM and an Intel HD Graphics 5500. Adjust the numbers if your hardware is different.
 
 > [!WARNING]
-> Ollama's API has no password. Anyone on your network can use it. Never forward port `11434` on your router. For access from outside the house, use a VPN such as Tailscale or WireGuard.
+> Ollama's API has no password. The firewall only lets trusted networks reach it (your LAN, and Tailscale if enabled). Never forward port `11434` on your router. For access from outside the house, use Tailscale: see [Phone access](../infra/README.md#phone-access).
 
 ## Contents
 
@@ -23,18 +23,19 @@ The server in this guide is an Ubuntu machine with 11 GB of RAM and an Intel HD 
 ## How it works
 
 ```text
-Mac (OpenTofu) ──SSH──▶ server
-                         ├─ Docker
-                         │   └─ ollama container ──▶ port 11434 on the LAN
-                         └─ /srv/homelab/ollama   (downloaded models)
+Mac (Ansible + OpenTofu) ──SSH──▶ server
+                                   ├─ ufw + SSH keys only
+                                   ├─ Docker
+                                   │   └─ ollama container ──▶ port 11434 (trusted networks only)
+                                   └─ /srv/homelab/ollama   (downloaded models)
 ```
 
-The setup runs in two steps, one per folder in `infra/`:
+The setup runs in two steps:
 
-1. **`01-host`** installs Docker from Docker's official repository.
-2. **`02-ollama`** starts the Ollama container and downloads the models you list.
+1. **`make host`** runs the Ansible playbook in `infra/ansible/`. It configures the operating system: security updates, SSH with keys only, the `ufw` firewall, and Docker.
+2. **`make ollama`** runs the OpenTofu stack in `infra/tofu/ollama/`. It starts the Ollama container and downloads the models you list.
 
-They're separate because the second step talks to Docker directly, so Docker has to be installed first.
+Ansible runs first because OpenTofu talks to Docker directly, so Docker has to be installed already. `make all` runs both.
 
 ### Why Docker?
 
@@ -48,36 +49,25 @@ Ollama doesn't use the Intel HD Graphics 5500 for acceleration. An integrated GP
 
 ## Before you start
 
-You only do these once. Replace `192.168.1.50` with your server's IP (`hostname -I` on the server shows it).
+You only do these once. Replace `192.168.1.149` with your server's IP (`hostname -I` on the server shows it).
 
-1. **Install OpenTofu on the Mac.**
+1. **Install OpenTofu and Ansible on the Mac.**
 
    ```bash
-   brew install opentofu
-   tofu version
+   brew install opentofu ansible
+   tofu version && ansible --version
    ```
 
 2. **Set up SSH key login.** If `~/.ssh/id_ed25519` doesn't exist yet, create it with `ssh-keygen -t ed25519` and press Enter at the passphrase prompt. OpenTofu reads the key file directly, so the key can't have a passphrase.
 
    ```bash
-   ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@192.168.1.50
-   ssh pedrosantos@192.168.1.50 'echo ok'
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@192.168.1.149
+   ssh pedrosantos@192.168.1.149 'echo ok'
    ```
 
    The second command must print `ok` without asking for a password.
 
-3. **Allow `sudo` without a password.** OpenTofu can't type passwords.
-
-   ```bash
-   ssh -t pedrosantos@192.168.1.50 'echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-homelab && sudo chmod 440 /etc/sudoers.d/90-homelab'
-   ```
-
-   This asks for your server password one last time.
-
-   > [!CAUTION]
-   > Anyone who has this SSH key now has full control of the server. Keep the key on your Mac only and never commit it.
-
-4. **Fill in the variables.**
+3. **Fill in the variables.**
 
    ```bash
    cd infra
@@ -96,7 +86,7 @@ From the `infra` folder:
    make host
    ```
 
-   OpenTofu shows what it will do and waits for you to type `yes`. Installing Docker takes 1–3 minutes.
+   Ansible asks for your sudo password (`BECOME password`) and then configures the server. The first run takes 2–5 minutes. After it, SSH accepts keys only.
 
 2. **Start Ollama.**
 
@@ -108,20 +98,22 @@ From the `infra` folder:
 
 When it finishes, OpenTofu prints `api_url`, the address you'll use from other devices.
 
-You can run both commands again whenever you like. If nothing changed, OpenTofu reports `No changes` and does nothing.
+You can run both commands again whenever you like. If nothing changed, Ansible reports `changed=0` and OpenTofu reports `No changes`.
+
+After reinstalling the server, run `make reinstalled` and then `make all`. See [Rebuild after a reinstall](../infra/README.md#rebuild-after-a-reinstall).
 
 ## Test it
 
 1. **List the models** from the Mac:
 
    ```bash
-   curl http://192.168.1.50:11434/api/tags
+   curl http://192.168.1.149:11434/api/tags
    ```
 
 2. **Ask something.**
 
    ```bash
-   curl http://192.168.1.50:11434/api/generate -d '{"model":"llama3.2:3b","prompt":"Explain what a homelab is in one sentence.","stream":false}'
+   curl http://192.168.1.149:11434/api/generate -d '{"model":"llama3.2:3b","prompt":"Explain what a homelab is in one sentence.","stream":false}'
    ```
 
    The first answer takes longer because the model has to load into memory. Later answers are faster.
@@ -165,12 +157,12 @@ Ollama is also set to keep only one model in memory and answer one request at a 
 
 | Task | Command |
 | --- | --- |
-| Chat in the terminal | `ssh -t pedrosantos@192.168.1.50 docker exec -it ollama ollama run llama3.2:3b` (type `/bye` to exit) |
-| See what's loaded in memory | `ssh pedrosantos@192.168.1.50 docker exec ollama ollama ps` |
-| Follow the logs | `ssh pedrosantos@192.168.1.50 docker logs -f ollama` |
-| Check memory on the server | `ssh pedrosantos@192.168.1.50 free -h` |
+| Chat in the terminal | `ssh -t pedrosantos@192.168.1.149 docker exec -it ollama ollama run llama3.2:3b` (type `/bye` to exit) |
+| See what's loaded in memory | `ssh pedrosantos@192.168.1.149 docker exec ollama ollama ps` |
+| Follow the logs | `ssh pedrosantos@192.168.1.149 docker logs -f ollama` |
+| Check memory on the server | `ssh pedrosantos@192.168.1.149 free -h` |
 
-Any app that supports Ollama can use it. Point it at `http://192.168.1.50:11434`. Examples are Open WebUI (a ChatGPT-style web page), Continue in VS Code, and Obsidian plugins.
+Any app that supports Ollama can use it. Point it at `http://192.168.1.149:11434`. Examples are Open WebUI (a ChatGPT-style web page), Continue in VS Code, and Obsidian plugins.
 
 ## Update or remove
 
@@ -180,17 +172,17 @@ Any app that supports Ollama can use it. Point it at `http://192.168.1.50:11434`
 | Preview changes | `make plan-ollama` shows what would change without touching anything. |
 | Remove Ollama | `make destroy-ollama` |
 
-Removing Ollama doesn't delete the model files. They stay in `/srv/homelab/ollama` on the server. To free the space too, run `ssh pedrosantos@192.168.1.50 sudo rm -rf /srv/homelab/ollama`.
+Removing Ollama doesn't delete the model files. They stay in `/srv/homelab/ollama` on the server. To free the space too, run `ssh pedrosantos@192.168.1.149 sudo rm -rf /srv/homelab/ollama`.
 
 ## Troubleshooting
 
 | What you see | Cause | Fix |
 | --- | --- | --- |
 | `Permission denied (publickey)` | The key isn't on the server | Repeat step 2 of [Before you start](#before-you-start) |
-| `needs passwordless sudo` | The sudo step was skipped | Repeat step 3 of [Before you start](#before-you-start) |
-| `Host key verification failed` | The server was reinstalled, or the IP now belongs to another machine | `ssh-keygen -R 192.168.1.50`, then `ssh pedrosantos@192.168.1.50` once and answer `yes` |
+| `Missing sudo password` or `Incorrect sudo password` | Wrong password at the prompt | Type your server user's password at `BECOME password` |
+| `Host key verification failed` | The server was reinstalled, or the IP now belongs to another machine | `make reinstalled` (from `infra/`) |
 | `permission denied while trying to connect to the Docker daemon socket` | Your user isn't in the `docker` group yet | Run `make host` again, then retry `make ollama` |
-| `curl: (7) Failed to connect` from another device | Firewall, or `bind_address` set to `127.0.0.1` | On the server, `sudo ufw status`. If it's active: `sudo ufw allow from 192.168.1.0/24 to any port 11434` |
+| `curl: (7) Failed to connect` from another device | The device isn't in `trusted_networks`, or `bind_address` is `127.0.0.1` | Add its network or IP to `trusted_networks` in `infra/ansible/group_vars/all.yml`, then `make host`. `ufw allow` doesn't help: Docker ports skip ufw |
 | A model download stops halfway | Network dropped | Run `make ollama` again. The download resumes |
 | `model requires more system memory` | The model is bigger than `memory_limit_mb` allows | Choose a smaller model from [Choose models](#choose-models) |
 | Answers are extremely slow, and `free -h` shows swap in use | The model is too big for the RAM | Use a 3B model, and set `memory_limit_mb` |
@@ -200,16 +192,18 @@ Removing Ollama doesn't delete the model files. They stay in `/srv/homelab/ollam
 
 ```bash
 # One time, on the Mac
-brew install opentofu
-ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@192.168.1.50
+brew install opentofu ansible
+ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@192.168.1.149
 cd infra && cp homelab.tfvars.example homelab.tfvars   # set host
 
-# Deploy (both are safe to re-run)
-make host
-make ollama
+# Deploy (safe to re-run)
+make all            # = make host (Ansible) + make ollama (OpenTofu)
+
+# After reinstalling the server
+make reinstalled && make all
 
 # Test
-curl http://192.168.1.50:11434/api/tags
+curl http://192.168.1.149:11434/api/tags
 
 # Change models: edit `models` in homelab.tfvars, then
 make ollama

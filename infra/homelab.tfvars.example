@@ -1,0 +1,12 @@
+# Copy to homelab.tfvars and fill in. Read by the Makefile (Ansible) and by
+# every OpenTofu stack. homelab.tfvars is git-ignored.
+host            = "192.168.1.149" # server IP: reserve it in the router's DHCP
+ssh_user        = "pedrosantos"
+ssh_private_key = "~/.ssh/id_ed25519" # no passphrase: OpenTofu reads the file
+ssh_port        = 22
+
+# --- Optional Ollama settings (defaults in tofu/ollama/variables.tf) ---
+# models          = ["llama3.2:3b", "qwen2.5-coder:1.5b"]
+# ollama_tag      = "0.12.3"   # pin a version for reproducible rebuilds
+# keep_alive      = "5m"
+# memory_limit_mb = 8192

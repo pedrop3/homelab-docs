@@ -1,0 +1,55 @@
+---
+- name: Install ufw
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Block incoming traffic by default
+  community.general.ufw:
+    default: deny
+    direction: incoming
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
+- name: Allow outgoing traffic
+  community.general.ufw:
+    default: allow
+    direction: outgoing
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
+# Added before ufw is enabled, so the current SSH session survives.
+- name: Allow SSH from trusted networks
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "{{ ansible_port | default(22) | string }}"
+    src: "{{ item }}"
+    comment: ssh
+  loop: "{{ trusted_networks }}"
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
+# Docker publishes ports through its own iptables rules, which skip ufw.
+# DOCKER-USER is the chain Docker leaves for us: it filters traffic to
+# containers. Only trusted networks get through; containers' own traffic
+# (and replies to it) is untouched.
+- name: Filter Docker-published ports
+  ansible.builtin.blockinfile:
+    path: /etc/ufw/after.rules
+    marker: "# {mark} ANSIBLE MANAGED: docker"
+    block: |
+      *filter
+      :DOCKER-USER - [0:0]
+      -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+      -A DOCKER-USER -s 172.16.0.0/12 -j RETURN
+      {% for net in trusted_networks %}
+      -A DOCKER-USER -s {{ net }} -j RETURN
+      {% endfor %}
+      -A DOCKER-USER -m conntrack --ctstate NEW -j DROP
+      -A DOCKER-USER -j RETURN
+      COMMIT
+  notify: Reload ufw
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed

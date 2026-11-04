@@ -44,7 +44,7 @@ variable "port" {
 variable "keep_alive" {
   description = "How long a model stays in RAM after the last request."
   type        = string
-  default     = "-1"
+  default     = "5m"
 }
 
 variable "context_length" {

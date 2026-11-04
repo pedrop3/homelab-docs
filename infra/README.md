@@ -1,79 +1,76 @@
-# Homelab infrastructure (OpenTofu)
+# Homelab infrastructure
 
-Everything on the server is installed by OpenTofu, run from your Mac over SSH. Nothing is installed by hand except the one-time prerequisites below.
+Everything on the server is described in this folder and applied from the Mac over SSH. After a fresh install of the server, `make all` puts it back the way it was.
 
-| Stack | What it does | Provider |
+| Tool | Folder | What it does |
 | --- | --- | --- |
-| `01-host` | Installs Docker Engine from Docker's official repo and creates `/srv/homelab` | built-in `terraform_data` + SSH |
-| `02-ollama` | Runs Ollama in Docker (CPU-only) and pulls the models you list | [`kreuzwerker/docker`](https://search.opentofu.org/provider/kreuzwerker/docker) over SSH |
+| **Ansible** | `ansible/` | Configures the operating system: updates, SSH with keys only, firewall, Docker, laptop tweaks, optional Tailscale |
+| **OpenTofu** | `tofu/ollama/` | Runs Ollama in Docker (CPU-only) and pulls the models you list |
 
-The stacks are separate because the Docker provider has to reach a running Docker daemon as soon as it starts, so Docker must already be installed when it runs.
+The split follows a simple rule: Ansible owns what's *inside* Linux, OpenTofu owns the services and resources on top of it. Ansible runs first because OpenTofu's Docker provider needs a running Docker daemon.
 
-## Prerequisites (one time)
+## What Ansible sets up
 
-1. **Install OpenTofu on the Mac.**
+| Role | Result |
+| --- | --- |
+| `base` | Automatic security updates, lid closed doesn't suspend, journal capped at 200 MB, zram swap, `/srv/homelab` |
+| `ssh` | Login with SSH keys only, no root login. Stops with an error if your key isn't on the server, so it can't lock you out |
+| `firewall` | `ufw` blocks all incoming traffic except SSH from `trusted_networks`. Also filters Docker-published ports (see [Security](#security)) |
+| `docker` | Docker Engine from Docker's repo, rotated container logs, your user in the `docker` group |
+| `tailscale` | Off by default. Private access from your phone and Mac outside the house |
 
-   ```bash
-   brew install opentofu
-   tofu version
-   ```
+Settings are in [`ansible/group_vars/all.yml`](ansible/group_vars/all.yml).
 
-2. **Set up SSH key login on the server.** If `~/.ssh/id_ed25519` doesn't exist, create it with `ssh-keygen -t ed25519`.
+## One-time setup on the Mac
 
-   ```bash
-   ssh-copy-id -i ~/.ssh/id_ed25519.pub user@IP
-   ssh user@IP 'echo ok'   # must not ask for a password
-   ```
+```bash
+brew install opentofu ansible
+ssh-keygen -t ed25519          # skip if ~/.ssh/id_ed25519 exists; no passphrase
+cd infra
+cp homelab.tfvars.example homelab.tfvars   # set host / ssh_user
+```
 
-   OpenTofu reads the key file directly, so the key can't have a passphrase. If yours has one, create a separate key for the homelab.
+Reserve the server's IP in your router's DHCP settings, so it doesn't change and break `homelab.tfvars`.
 
-3. **Turn on passwordless sudo for that user** on the server. OpenTofu can't type a sudo password.
+## Rebuild after a reinstall
 
-   ```bash
-   ssh -t user@IP 'echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-homelab && sudo chmod 440 /etc/sudoers.d/90-homelab'
-   ```
-
-   > [!WARNING]
-   > Anyone who has this SSH key gets root on the server. Keep the key on your Mac only.
-
-4. **Create your variables file.**
+1. **Install Ubuntu Server.** Use the same username, and tick **Install OpenSSH server**.
+2. **Copy your key to the server.** This is the last time it asks for the password over SSH.
 
    ```bash
    cd infra
-   cp homelab.tfvars.example homelab.tfvars   # then edit host / ssh_user
+   make reinstalled          # forgets the old SSH key and the old OpenTofu state
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@xxx.xxx.x.x
    ```
 
-   `homelab.tfvars` is git-ignored.
+3. **Rebuild everything.**
 
-## Deploy
+   ```bash
+   make all
+   ```
 
-```bash
-cd infra
-make host     # installs Docker on the server
-make ollama   # starts Ollama and pulls the models
-```
+   Ansible asks for your sudo password (`BECOME password`), then OpenTofu shows its plan and waits for `yes`. The models download again, so the first run takes a while.
 
-Each command shows the plan and asks `yes` before changing anything. To preview without applying, run `make plan-ollama`.
+4. **Test it** with the Bruno collection, or `curl http://192.168.1.149:11434/api/tags`.
 
-After the first `init`, commit the `.terraform.lock.hcl` files so every run uses the same provider versions.
+If you use Tailscale, the reinstalled server joins as a new machine. Remove the old one in the Tailscale admin console.
 
-## Test
+## Day to day
 
-```bash
-tofu -chdir=02-ollama output -raw test_command | sh
-```
+| Task | Command |
+| --- | --- |
+| Preview what Ansible would change | `make check-host` |
+| Apply OS changes | `make host` |
+| Change models, update Ollama | edit `homelab.tfvars`, then `make ollama` |
+| Preview Ollama changes | `make plan-ollama` |
+| Remove Ollama | `make destroy-ollama`. Models stay in `/srv/homelab/ollama` |
+| Logs | `ssh pedrosantos@192.168.1.149 docker logs -f ollama` |
 
-Or from any machine on the LAN:
-
-```bash
-curl http://192.168.1.50:11434/api/tags      # list models
-```
-
-Any app that speaks the Ollama API (Open WebUI, Continue, etc.) can use `http://<server-ip>:11434`.
+Everything is safe to re-run. A second `make host` should finish with `changed=0`.
 
 ## Models on this hardware
 
-The server's GPU is an Intel HD Graphics 5500, which Ollama doesn't support, so inference runs on the CPU. The CPU has AVX2, which Ollama uses. Expect a few tokens per second from 3B models. Rough guide:
+The server's GPU is an Intel HD Graphics 5500, which Ollama doesn't support, so inference runs on the CPU (with AVX2).
 
 | Size | Examples | RAM needed | Speed |
 | --- | --- | --- | --- |
@@ -81,25 +78,31 @@ The server's GPU is an Intel HD Graphics 5500, which Ollama doesn't support, so 
 | 3–4B | `llama3.2:3b` (default), `gemma3:4b`, `qwen3:4b` | 3–4 GB | slow but OK |
 | 7–8B | `llama3.1:8b`, `qwen2.5:7b` | 6–8 GB | very slow |
 
-To change the list, edit `models` in `homelab.tfvars` and run `make ollama`:
+To change the list, set `models` in `homelab.tfvars` and run `make ollama`. Adding a name pulls the model, and removing one deletes it from the server.
 
-```hcl
-models = ["llama3.2:3b", "qwen2.5-coder:1.5b"]
-```
+## Phone access
 
-Adding a name pulls that model. Removing a name deletes it from the server.
+Any Ollama app on the phone can use `http://<server>:11434`.
 
-## Day-to-day
+- **At home:** use the server's LAN IP. The phone is on your Wi-Fi, which is a trusted network.
+- **Away from home:** set `tailscale_enabled: true` in `group_vars/all.yml`, create an auth key in the Tailscale admin console, and run `TS_AUTHKEY=tskey-... make host`. Install Tailscale on the phone and use the server's Tailscale name, `http://homelab:11434`.
 
-| Task | How |
+Never forward port 11434 on the router: the Ollama API has no password.
+
+## Security
+
+- **Docker skips `ufw`.** Published container ports go through Docker's own firewall rules, so `ufw allow` and `ufw deny` don't affect them. The `firewall` role adds rules to Docker's `DOCKER-USER` chain so only `trusted_networks` can reach any container port. To allow fewer devices, list single IPs in `trusted_networks`, such as `192.168.1.20/32`.
+- **SSH keys.** The SSH key on your Mac is the way in. Back it up somewhere safe, like a password manager. Without it, you need a keyboard and screen on the server.
+- **Passwordless sudo is no longer needed.** Ansible asks for the sudo password. If you created `/etc/sudoers.d/90-homelab` for the old setup, you can remove it: `ssh -t pedrosantos@192.168.1.149 sudo rm /etc/sudoers.d/90-homelab`.
+- **State.** OpenTofu keeps its state locally in `tofu/ollama/terraform.tfstate` (git-ignored). After a reinstall it no longer matches the server, which is why `make reinstalled` sets it aside.
+
+## Troubleshooting
+
+| What you see | Fix |
 | --- | --- |
-| Update Ollama | `make ollama`. With `ollama_tag = "latest"`, a new image is pulled when the tag moves. Pin a version (`ollama_tag = "0.x.y"`) to update on your own schedule. |
-| Cap RAM | `memory_limit_mb = 6144` in `homelab.tfvars` |
-| Restrict to the server only | `bind_address = "127.0.0.1"` |
-| Logs | `ssh user@<ip> docker logs -f ollama` |
-| Remove Ollama | `make destroy-ollama`. Models stay in `/srv/homelab/ollama`. |
-
-## Security notes
-
-- The Ollama API has **no authentication**. With the default `bind_address = "0.0.0.0"`, anything on your LAN can use it. Never forward port 11434 on your router. For remote access, use a VPN such as Tailscale or WireGuard.
-- State is kept locally in each stack (`terraform.tfstate`, git-ignored). It isn't secret today, but treat it as private.
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | The server was reinstalled. `make reinstalled` |
+| `Permission denied (publickey)` | `ssh-copy-id -i ~/.ssh/id_ed25519.pub pedrosantos@<ip>` |
+| `has no ~/.ssh/authorized_keys` | Same as above. Ansible stopped on purpose so you don't get locked out |
+| `Missing sudo password` or `Incorrect sudo password` | Type your server user's password at the `BECOME password` prompt |
+| After a reinstall, models are missing or `make ollama` complains about the old container | You skipped `make reinstalled`. Run it, then `make ollama` |
+| An app can't reach Ollama | Check that the device's IP is in `trusted_networks`, then `make host` |

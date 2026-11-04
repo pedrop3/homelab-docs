@@ -1,0 +1,62 @@
+---
+# Private network between the server, your Mac and your phone, without
+# opening any port on the router. Free for personal use.
+- name: Add Tailscale's signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/{{ ansible_facts['distribution'] | lower }}/{{ ansible_facts['distribution_release'] }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add Tailscale's apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/tailscale.sources
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/tailscale)
+      Types: deb
+      URIs: https://pkgs.tailscale.com/stable/{{ ansible_facts['distribution'] | lower }}
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: main
+      Signed-By: /usr/share/keyrings/tailscale-archive-keyring.gpg
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    # Always refresh: the base role already updated the cache this run, before
+    # the Tailscale repo existed, so a cache_valid_time check would skip it.
+    update_cache: true
+
+- name: Start Tailscale on boot
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'tailscale' in ansible_facts.packages  # dry run: skip until tailscale is installed
+
+- name: Check whether this server is logged in
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Log in with TS_AUTHKEY
+  ansible.builtin.command: >-
+    tailscale up --authkey={{ lookup('ansible.builtin.env', 'TS_AUTHKEY') }}
+    --hostname={{ tailscale_hostname }}
+  no_log: true
+  changed_when: true
+  when:
+    - (tailscale_status.stdout | default('{}', true) | from_json).BackendState | default('') != 'Running'
+    - lookup('ansible.builtin.env', 'TS_AUTHKEY') | length > 0
+
+- name: Explain how to log in
+  ansible.builtin.debug:
+    msg: >-
+      Tailscale is installed but not logged in. Run
+      `ssh -t {{ ansible_user }}@{{ inventory_hostname }} sudo tailscale up`
+      and open the link, or re-run with TS_AUTHKEY=tskey-... make host.
+  when:
+    - (tailscale_status.stdout | default('{}', true) | from_json).BackendState | default('') != 'Running'
+    - lookup('ansible.builtin.env', 'TS_AUTHKEY') | length == 0
