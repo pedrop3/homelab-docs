@@ -27,6 +27,49 @@
   loop: "{{ trusted_networks }}"
   when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
 
+# The ufw module only adds rules. Rules for networks removed from
+# trusted_networks (or for an old SSH port) are deleted here, after the new
+# ones exist, so the current SSH session is never cut off.
+- name: List the SSH rules ufw already has
+  ansible.builtin.command: ufw show added
+  register: ufw_added
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
+- name: Remove SSH rules that are no longer trusted
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    port: "{{ item[1] }}"
+    src: "{{ item[0] }}"
+    comment: ssh
+    delete: true
+  loop: "{{ ufw_added.stdout | default('') | regex_findall(ssh_rule_regex) }}"
+  loop_control:
+    label: "{{ item[0] }} port {{ item[1] }}"
+  when: >-
+    (item[0] | regex_replace('/32$', '')) not in trusted_ssh_sources
+    or item[1] != (ansible_port | default(22) | string)
+  vars:
+    # ufw shows a single IP without "/32", so compare without it.
+    trusted_ssh_sources: "{{ trusted_networks | map('regex_replace', '/32$', '') | list }}"
+    # Matches lines like: ufw allow from 192.168.0.0/23 to any port 22 proto tcp comment 'ssh'
+    ssh_rule_regex: "from (\\S+) to any port (\\d+) proto tcp comment 'ssh'"
+
+# Tailscale's direct (peer-to-peer) connections arrive on this UDP port.
+# Without it, traffic still works but goes through Tailscale's relays (slower).
+# Only authenticated WireGuard packets are accepted on it.
+- name: Allow Tailscale direct connections
+  community.general.ufw:
+    rule: allow
+    proto: udp
+    port: "41641"
+    comment: tailscale
+  when:
+    - tailscale_enabled | bool
+    - not ansible_check_mode or 'ufw' in ansible_facts.packages  # dry run: skip until ufw is installed
+
 # Docker publishes ports through its own iptables rules, which skip ufw.
 # DOCKER-USER is the chain Docker leaves for us: it filters traffic to
 # containers. Only trusted networks get through; containers' own traffic
