@@ -7,4 +7,5 @@ crash.log
 
 # Local variables (IPs, usernames, key paths)
 homelab.tfvars
+ansible/local.yml
 *.auto.tfvars
