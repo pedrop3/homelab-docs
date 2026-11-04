@@ -1,0 +1,18 @@
+---
+# Turns a fresh Ubuntu/Debian install into the homelab host.
+# Safe to re-run: a second run reports no changes.
+- name: Prepare the homelab server
+  hosts: all
+  become: true
+  # In a dry run (--check) nothing is installed, so tasks that need a new
+  # package are skipped while it is missing (the `when:` lines in the roles).
+  pre_tasks:
+    - name: List installed packages
+      ansible.builtin.package_facts:
+  roles:
+    - base       # updates, laptop lid, journald, zram
+    - ssh        # key-only login
+    - firewall   # ufw + rules for Docker-published ports
+    - docker     # Docker Engine (replaces the old 01-host stack)
+    - role: tailscale
+      when: tailscale_enabled | bool

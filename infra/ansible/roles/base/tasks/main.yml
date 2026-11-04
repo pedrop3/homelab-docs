@@ -1,0 +1,83 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - unattended-upgrades
+      - zram-tools
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Turn on automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      // Managed by Ansible (roles/base)
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Enable unattended-upgrades
+  ansible.builtin.systemd_service:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'unattended-upgrades' in ansible_facts.packages  # dry run: skip until unattended-upgrades is installed
+
+- name: Create systemd drop-in directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/systemd/journald.conf.d
+    - /etc/systemd/logind.conf.d
+
+- name: Cap the journal size on disk
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-homelab.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/base)
+      [Journal]
+      SystemMaxUse={{ journald_max_use }}
+  notify: Restart journald
+
+- name: Keep running with the laptop lid closed
+  ansible.builtin.copy:
+    dest: /etc/systemd/logind.conf.d/10-lid.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/base)
+      [Login]
+      HandleLidSwitch=ignore
+      HandleLidSwitchExternalPower=ignore
+      HandleLidSwitchDocked=ignore
+  when: laptop_ignore_lid | bool
+  notify: Restart logind
+
+- name: Configure zram swap
+  ansible.builtin.copy:
+    dest: /etc/default/zramswap
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/base)
+      ALGO=zstd
+      PERCENT={{ zram_percent }}
+      PRIORITY=100
+  notify: Restart zramswap
+
+- name: Enable zram swap
+  ansible.builtin.systemd_service:
+    name: zramswap
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'zram-tools' in ansible_facts.packages  # dry run: skip until zram-tools is installed
+
+- name: Create the data directory
+  ansible.builtin.file:
+    path: "{{ data_root }}"
+    state: directory
+    mode: "0755"

@@ -1,0 +1,29 @@
+---
+# Server settings. Connection details (IP, user, key) come from ../homelab.tfvars.
+
+# Where service data lives. Must match `data_dir` in the OpenTofu stacks.
+data_root: /srv/homelab
+
+# --- Who may connect ---
+# Your home network, detected from the server's own IP (e.g. 192.168.1.0/24).
+lan_cidr: "{{ ansible_facts['default_ipv4']['network'] }}/{{ ansible_facts['default_ipv4']['prefix'] }}"
+
+# Sources allowed to reach SSH and every Docker-published port (Ollama, ...).
+# Everything else is dropped. Narrow this to single IPs (e.g. "192.168.1.20/32")
+# if you don't trust every device on your Wi-Fi.
+# The Tailscale range (100.64.0.0/10: your phone and Mac when away from home)
+# is only added when tailscale_enabled is true.
+trusted_networks: "{{ [lan_cidr] + (['100.64.0.0/10'] if tailscale_enabled | bool else []) }}"
+
+# --- Remote access (phone app outside the house) ---
+# true installs Tailscale. Log in with TS_AUTHKEY=tskey-... make host,
+# or once by hand: ssh -t <server> sudo tailscale up
+tailscale_enabled: false
+tailscale_hostname: homelab
+
+# --- Host tuning (old laptop with an SSD) ---
+laptop_ignore_lid: true    # keep running with the lid closed
+journald_max_use: 200M     # cap logs on disk
+zram_percent: 50           # compressed swap in RAM, % of RAM
+docker_log_max_size: 10m   # per container log file
+docker_log_max_files: 3

@@ -1,0 +1,83 @@
+---
+# Same result as the old 01-host/scripts/install-docker.sh.
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Docker's signing key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker's apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    mode: "0644"
+    content: |
+      # Managed by Ansible (roles/docker)
+      Types: deb
+      URIs: https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: stable
+      Architectures: {{ docker_arch[ansible_facts['architecture']] }}
+      Signed-By: /etc/apt/keyrings/docker.asc
+  vars:
+    docker_arch:
+      x86_64: amd64
+      aarch64: arm64
+
+# The old install script used the one-line format; keeping both makes apt warn.
+- name: Remove the old Docker repository file
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.list
+    state: absent
+
+- name: Install Docker Engine
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    # Always refresh: the base role already updated the cache this run, before
+    # the Docker repo existed, so a cache_valid_time check would skip it.
+    update_cache: true
+
+# Rotated logs protect the SSD. live-restore keeps containers running while
+# the Docker daemon restarts (e.g. on a Docker update).
+- name: Configure the Docker daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: "{{ docker_daemon | to_nice_json }}\n"
+  vars:
+    docker_daemon:
+      log-driver: json-file
+      log-opts:
+        max-size: "{{ docker_log_max_size }}"
+        max-file: "{{ docker_log_max_files | string }}"
+      live-restore: true
+  notify: Restart docker
+
+- name: Start Docker on boot
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages  # dry run: skip until docker-ce is installed
+
+# Lets OpenTofu's Docker provider connect over SSH without sudo.
+- name: Add the login user to the docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  when: not ansible_check_mode or 'docker-ce' in ansible_facts.packages  # dry run: skip until docker-ce is installed
+
+- name: Reconnect so the new group applies
+  ansible.builtin.meta: reset_connection  # always runs: meta tasks ignore `when`
