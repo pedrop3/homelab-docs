@@ -1,0 +1,12 @@
+---
+# Copy to local.yml and fill in. local.yml is git-ignored: it holds the
+# addresses of your own devices. Read by `make host` / `make check-host`.
+
+# Devices on the home network allowed to reach SSH and every Docker-published
+# port (Ollama, ...), without Tailscale. Everything else on the LAN is dropped.
+# Reserve each IP in the router's DHCP, or a new IP locks that device out.
+#   Find your Mac's IP: ipconfig getifaddr en0
+# To trust the whole home network instead: ["{{ lan_cidr }}"]
+# To allow Tailscale only (no LAN access at all): []
+trusted_lan_hosts:
+  - 192.168.1.20/32
